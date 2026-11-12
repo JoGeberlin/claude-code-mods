@@ -1,0 +1,12 @@
+{
+  "name": "iwanlenin-mods",
+  "description": "Mods for Claude Code: plugins whose hooks module changes Claude Code's own interface.",
+  "owner": { "name": "iwanlenin", "url": "https://github.com/iwanlenin" },
+  "plugins": [
+    {
+      "name": "session-meter",
+      "source": "./session-meter",
+      "description": "Two-line table above the prompt: prompt-cache age, total token use, context window fill and session cost."
+    }
+  ]
+}
