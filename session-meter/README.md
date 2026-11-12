@@ -36,7 +36,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 ## Settings
 
-Set at install, or later through `/config`:
+Each setting uses its default until you change it with `/plugin configure session-meter@iwanlenin-mods` in Claude Code, or `--config KEY=VALUE` on `claude plugin install`:
 
 | Setting | Default | Meaning |
 |---|---|---|
