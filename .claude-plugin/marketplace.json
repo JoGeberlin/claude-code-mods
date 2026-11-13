@@ -6,7 +6,7 @@
     {
       "name": "session-meter",
       "source": "./session-meter",
-      "description": "Two-line table above the prompt: prompt-cache age, total token use, context window fill and session cost."
+      "description": "Gauges above the prompt: prompt-cache age dial, context window ring and session cost."
     }
   ]
 }

@@ -1,10 +1,3 @@
-export type Totals = {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-}
-
 export type Rate = {
   /** US dollars per euro, as the ECB publishes it. */
   usdPerEur: number
@@ -26,7 +19,6 @@ export type Context = {
 declare module 'claude-code' {
   interface PluginState {
     'session-meter': {
-      totals: Shaped<Totals>
       lastResponseAt: number | null
       costUsd: number | null
       rate: Shaped<Rate | null>

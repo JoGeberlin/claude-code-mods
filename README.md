@@ -4,7 +4,7 @@ Mods for Claude Code: plugins whose hooks module changes Claude Code's own inter
 
 | Mod | What it does |
 |---|---|
-| [session-meter](session-meter/) | Two-line table above the prompt: prompt-cache age (green, yellow, red), total token use, context window fill and the session's cost in euro or dollars. |
+| [session-meter](session-meter/) | Gauges above the prompt: prompt-cache age on a green-to-red dial with a needle, context window fill as a ring with the tokens inside, and the session's cost in euro or dollars. |
 
 ## Install a mod
 

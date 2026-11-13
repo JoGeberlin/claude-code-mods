@@ -1,26 +1,26 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Context, Rate, Totals } from '../types'
+import type { Context, Rate } from '../types'
+import { GAUGE_PX, barCells, cacheGauge, contextGauge } from './gauges'
 import {
   MINUTE_MS,
+  cacheFraction,
   cacheLevel,
   cacheMinutes,
-  formatContext,
+  compactTokens,
+  contextFraction,
   formatCost,
-  formatTokens,
   isRateDue,
   parseEcbRate,
   readSettings,
 } from './meter'
 import type { CacheLevel, Settings } from './meter'
 
-const ZERO: Totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 const RATE_KEY = 'rate'
+/** Cells of each terminal bar. */
+const BAR_CELLS = 12
 
-const totals = atom({ plugin: 'session-meter', key: 'totals' } as const, ZERO, {
-  shape: 'totals-1',
-})
 const lastResponseAt = atom(
   { plugin: 'session-meter', key: 'lastResponseAt' } as const,
   null as number | null,
@@ -110,18 +110,9 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     const result = yield* next(e)
-    const usage = result.usage
-    if (usage !== null) {
-      await update($, totals, sum => ({
-        input: sum.input + usage.input_tokens,
-        output: sum.output + usage.output_tokens,
-        cacheRead: sum.cacheRead + usage.cache_read_input_tokens,
-        cacheWrite: sum.cacheWrite + usage.cache_creation_input_tokens,
-      }))
-      if (e.agentId === undefined) {
-        const now = await $.clock.now()
-        await update($, lastResponseAt, () => now)
-      }
+    if (result.usage !== null && e.agentId === undefined) {
+      const now = await $.clock.now()
+      await update($, lastResponseAt, () => now)
     }
 
     return result
@@ -143,7 +134,6 @@ export const register: Register = (on, options) => {
 
     const { Box, Text } = $.ui.resolve(e)
     await read($, tick)
-    const sum = await read($, totals)
     const last = await read($, lastResponseAt)
     const usd = await read($, costUsd)
     const usdPerEur = await read($, rate)
@@ -151,28 +141,66 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
 
     const minutes = last === null ? null : cacheMinutes(last, now)
-    const cacheColor = minutes === null ? undefined : LEVEL_COLOR[cacheLevel(minutes, settings)]
-    const total = sum.input + sum.output + sum.cacheRead + sum.cacheWrite
+    const level = minutes === null ? null : cacheLevel(minutes, settings)
+    const cost = formatCost(usd, usdPerEur, settings)
 
-    const cells: { key: string; head: string; value: string; color?: string }[] = [
-      { key: 'cache', head: 'Cache', value: minutes === null ? '—' : `${minutes} min`, color: cacheColor },
-      { key: 'total', head: 'Total token use', value: formatTokens(total) },
-      { key: 'context', head: 'Context', value: formatContext(fill) },
-      { key: 'cost', head: 'Cost', value: formatCost(usd, usdPerEur, settings) },
-    ]
+    // The terminal has no Svg element: it draws block bars below instead.
+    if (e.surface !== 'terminal') {
+      const { Svg } = $.ui.resolve({ ...e, surface: e.surface })
+      const cache = cacheGauge(minutes, level, settings)
+      const ctx = contextGauge(fill)
+
+      return (
+        <Box flexDirection="row" flexWrap="nowrap" width="100%" alignItems="center">
+          <Box key="cache" width="33%" alignItems="center">
+            <Svg source={cache.source} alt={cache.alt} width={GAUGE_PX} height={GAUGE_PX} />
+          </Box>
+          <Box key="context" width="34%" alignItems="center">
+            <Svg source={ctx.source} alt={ctx.alt} width={GAUGE_PX} height={GAUGE_PX} />
+          </Box>
+          <Box key="cost" width="33%" flexDirection="column" alignItems="center">
+            <Text bold tabular wrap="truncate">
+              {cost}
+            </Text>
+            <Text dimColor>cost</Text>
+          </Box>
+        </Box>
+      )
+    }
+
+    const [cacheOn, cacheOff] = barCells(minutes === null ? 0 : cacheFraction(minutes, settings), BAR_CELLS)
+    const share = contextFraction(fill)
+    const [ctxRed, ctxGreen] = barCells(share ?? 0, BAR_CELLS)
+    const levelColor = level === null ? undefined : LEVEL_COLOR[level]
+    const ctxText =
+      fill === null
+        ? '—'
+        : `${fill.tokens === undefined ? '—' : compactTokens(fill.tokens)} / ${compactTokens(fill.window)}`
 
     return (
-      <Box flexDirection="row" flexWrap="nowrap" width="100%">
-        {cells.map(cell => (
-          <Box key={cell.key} flexDirection="column" width={`${100 / cells.length}%`}>
-            <Text dimColor wrap="truncate">
-              {cell.head}
-            </Text>
-            <Text bold tabular wrap="truncate" color={cell.color}>
-              {cell.value}
-            </Text>
-          </Box>
-        ))}
+      <Box flexDirection="row" flexWrap="nowrap" width="100%" gap={3}>
+        <Box key="cache" flexDirection="row">
+          <Text dimColor>cache </Text>
+          <Text color={levelColor}>{'█'.repeat(cacheOn)}</Text>
+          <Text dimColor>{'░'.repeat(cacheOff)}</Text>
+          <Text bold tabular color={levelColor}>
+            {minutes === null ? ' —' : ` ${minutes} min`}
+          </Text>
+        </Box>
+        <Box key="context" flexDirection="row">
+          <Text dimColor>context </Text>
+          <Text color="error">{'█'.repeat(ctxRed)}</Text>
+          <Text color="success">{'█'.repeat(ctxGreen)}</Text>
+          <Text bold tabular>
+            {` ${ctxText}`}
+          </Text>
+        </Box>
+        <Box key="cost" flexDirection="row">
+          <Text dimColor>cost </Text>
+          <Text bold tabular>
+            {cost}
+          </Text>
+        </Box>
       </Box>
     )
   })

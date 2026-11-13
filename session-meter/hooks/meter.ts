@@ -5,6 +5,7 @@ import type { Context, Rate } from '../types'
 export type Settings = {
   warnMinutes: number
   staleMinutes: number
+  gaugeMinutes: number
   currency: 'EUR' | 'USD'
   rateUrl: string
   rateRefreshHours: number
@@ -19,6 +20,7 @@ const HOUR_MS = 60 * MINUTE_MS
 export function readSettings(options: PluginOptions): Settings {
   const warnMinutes = positiveNumber(options, 'warnMinutes')
   const staleMinutes = positiveNumber(options, 'staleMinutes')
+  const gaugeMinutes = positiveNumber(options, 'gaugeMinutes')
   const rateRefreshHours = positiveNumber(options, 'rateRefreshHours')
   const currency = options.currency
   const rateUrl = options.rateUrl
@@ -28,6 +30,11 @@ export function readSettings(options: PluginOptions): Settings {
       `session-meter: warnMinutes (${warnMinutes}) must be below staleMinutes (${staleMinutes})`,
     )
   }
+  if (staleMinutes >= gaugeMinutes) {
+    throw new Error(
+      `session-meter: staleMinutes (${staleMinutes}) must be below gaugeMinutes (${gaugeMinutes})`,
+    )
+  }
   if (currency !== 'EUR' && currency !== 'USD') {
     throw new Error(`session-meter: currency must be EUR or USD, got ${String(currency)}`)
   }
@@ -35,7 +42,7 @@ export function readSettings(options: PluginOptions): Settings {
     throw new Error(`session-meter: rateUrl must be an https URL, got ${String(rateUrl)}`)
   }
 
-  return { warnMinutes, staleMinutes, currency, rateUrl, rateRefreshHours }
+  return { warnMinutes, staleMinutes, gaugeMinutes, currency, rateUrl, rateRefreshHours }
 }
 
 function positiveNumber(options: PluginOptions, name: string): number {
@@ -60,26 +67,26 @@ export function cacheLevel(minutes: number, settings: Settings): CacheLevel {
   return 'stale'
 }
 
-/** 950 → "950", 3_140 → "3.1k", 1_240_000 → "1.24M". */
-export function formatTokens(count: number): string {
+/** The share of the cache gauge's full scale (gaugeMinutes) the age has reached, 0 to 1. */
+export function cacheFraction(minutes: number, settings: Settings): number {
+  return Math.min(1, minutes / settings.gaugeMinutes)
+}
+
+/** The share of the context window in use, 0 to 1; null before the first response. */
+export function contextFraction(context: Context | null): number | null {
+  if (context === null || context.tokens === undefined) return null
+  const share = context.percent === undefined ? context.tokens / context.window : context.percent / 100
+
+  return Math.min(1, Math.max(0, share))
+}
+
+/** 950 → "950", 231_200 → "231k", 1_000_000 → "1M", 1_240_000 → "1.24M". */
+export function compactTokens(count: number): string {
+  const thousands = Math.round(count / 1_000)
   if (count < 1_000) return String(count)
-  if (count < 1_000_000) return `${trim((count / 1_000).toFixed(1))}k`
+  if (thousands < 1_000) return `${thousands}k`
 
-  return `${trim((count / 1_000_000).toFixed(2))}M`
-}
-
-function trim(fixed: string): string {
-  return fixed.replace(/\.?0+$/, '')
-}
-
-/** The context cell: "23% · 231.2k / 1M"; the window alone before the first response. */
-export function formatContext(context: Context | null): string {
-  if (context === null) return '—'
-  const window = formatTokens(context.window)
-  if (context.tokens === undefined) return `— / ${window}`
-  const percent = context.percent ?? Math.round((context.tokens / context.window) * 100)
-
-  return `${percent}% · ${formatTokens(context.tokens)} / ${window}`
+  return `${(count / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`
 }
 
 /** The cost cell: euro when a rate is at hand and EUR is chosen, else dollars. */

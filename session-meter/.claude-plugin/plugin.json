@@ -1,8 +1,8 @@
 {
   "name": "session-meter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Session Meter",
-  "description": "Two-line table above the prompt: prompt-cache age (green, yellow, red), total token use, context window fill and the session's cost in euro or dollars.",
+  "description": "Gauges above the prompt: prompt-cache age on a green-to-red dial with a needle, context window fill as a ring with the tokens inside, and the session's cost in euro or dollars.",
   "author": {
     "name": "JoGeberlin",
     "url": "https://github.com/JoGeberlin"
@@ -16,14 +16,20 @@
     "warnMinutes": {
       "type": "number",
       "title": "Cache age turning yellow (minutes)",
-      "description": "From this cache age on, the Cache cell is yellow.",
+      "description": "From this cache age on, the cache dial and its figure are yellow.",
       "default": 40
     },
     "staleMinutes": {
       "type": "number",
       "title": "Cache age turning red (minutes)",
-      "description": "Past this cache age, the Cache cell is red.",
+      "description": "Past this cache age, the cache dial and its figure are red.",
       "default": 55
+    },
+    "gaugeMinutes": {
+      "type": "number",
+      "title": "Cache gauge full scale (minutes)",
+      "description": "The cache age at the dial's right end; the needle stops there.",
+      "default": 60
     },
     "currency": {
       "type": "string",
