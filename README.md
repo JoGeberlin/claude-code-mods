@@ -11,10 +11,10 @@ Mods for Claude Code: plugins whose hooks module changes Claude Code's own inter
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install <mod> --marketplace iwanlenin/claude-code-mods
+/plugin install <mod> --marketplace JoGeberlin/claude-code-mods
 ```
 
-For example `/plugin install session-meter --marketplace iwanlenin/claude-code-mods`. Each mod's README describes what it shows, its settings, and what it runs, sends or fetches.
+For example `/plugin install session-meter --marketplace JoGeberlin/claude-code-mods`. Each mod's README describes what it shows, its settings, and what it runs, sends or fetches.
 
 ## License
 

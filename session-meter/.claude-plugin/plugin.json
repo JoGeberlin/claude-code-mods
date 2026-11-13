@@ -4,11 +4,11 @@
   "displayName": "Session Meter",
   "description": "Two-line table above the prompt: prompt-cache age (green, yellow, red), total token use, context window fill and the session's cost in euro or dollars.",
   "author": {
-    "name": "iwanlenin",
-    "url": "https://github.com/iwanlenin"
+    "name": "JoGeberlin",
+    "url": "https://github.com/JoGeberlin"
   },
-  "homepage": "https://github.com/iwanlenin/claude-code-mods/tree/main/session-meter",
-  "repository": "https://github.com/iwanlenin/claude-code-mods",
+  "homepage": "https://github.com/JoGeberlin/claude-code-mods/tree/main/session-meter",
+  "repository": "https://github.com/JoGeberlin/claude-code-mods",
   "license": "MIT",
   "keywords": ["tokens", "cost", "prompt-cache", "context", "status"],
   "types": "./types/index.d.ts",

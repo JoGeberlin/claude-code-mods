@@ -21,7 +21,7 @@ The table updates after every model response and once a minute while the session
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install session-meter --marketplace iwanlenin/claude-code-mods
+/plugin install session-meter --marketplace JoGeberlin/claude-code-mods
 ```
 
 Answer `y` to add the marketplace, then pick a scope (user scope loads it in every session).
@@ -29,14 +29,14 @@ Answer `y` to add the marketplace, then pick a scope (user scope loads it in eve
 From a shell:
 
 ```
-claude plugin install session-meter --marketplace iwanlenin/claude-code-mods
+claude plugin install session-meter --marketplace JoGeberlin/claude-code-mods
 ```
 
-In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `iwanlenin/claude-code-mods`, then Add plugin.
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `JoGeberlin/claude-code-mods`, then Add plugin.
 
 ## Settings
 
-Each setting uses its default until you change it with `/plugin configure session-meter@iwanlenin-mods` in Claude Code, or `--config KEY=VALUE` on `claude plugin install`:
+Each setting uses its default until you change it with `/plugin configure session-meter@jogeberlin-mods` in Claude Code, or `--config KEY=VALUE` on `claude plugin install`:
 
 | Setting | Default | Meaning |
 |---|---|---|

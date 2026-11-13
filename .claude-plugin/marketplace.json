@@ -1,7 +1,7 @@
 {
-  "name": "iwanlenin-mods",
+  "name": "jogeberlin-mods",
   "description": "Mods for Claude Code: plugins whose hooks module changes Claude Code's own interface.",
-  "owner": { "name": "iwanlenin", "url": "https://github.com/iwanlenin" },
+  "owner": { "name": "JoGeberlin", "url": "https://github.com/JoGeberlin" },
   "plugins": [
     {
       "name": "session-meter",
