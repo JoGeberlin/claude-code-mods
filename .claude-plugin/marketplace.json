@@ -6,7 +6,7 @@
     {
       "name": "session-meter",
       "source": "./session-meter",
-      "description": "Gauges above the prompt: prompt-cache age dial, context window ring and session cost."
+      "description": "Gauges above the prompt: prompt-cache age dial, context window, plan session and weekly usage, and session cost. No network use."
     }
   ]
 }

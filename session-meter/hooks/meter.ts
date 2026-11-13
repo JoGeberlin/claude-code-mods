@@ -1,29 +1,31 @@
 import type { PluginOptions } from 'claude-code'
 
-import type { Context, Rate } from '../types'
+import type { Context, Limit } from '../types'
 
 export type Settings = {
   warnMinutes: number
   staleMinutes: number
   gaugeMinutes: number
-  currency: 'EUR' | 'USD'
-  rateUrl: string
-  rateRefreshHours: number
 }
 
 export type CacheLevel = 'fresh' | 'warn' | 'stale'
 
 const MINUTE_MS = 60_000
-const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * 60 * MINUTE_MS
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/** The gauge label per usage window the engine names; another kind shows as named. */
+const LIMIT_LABEL: Record<string, string> = {
+  five_hour: 'Session',
+  seven_day: 'Week',
+  spend_limit: 'Spend',
+}
 
 /** Reads the manifest's userConfig values; a value it cannot use fails the load. */
 export function readSettings(options: PluginOptions): Settings {
   const warnMinutes = positiveNumber(options, 'warnMinutes')
   const staleMinutes = positiveNumber(options, 'staleMinutes')
   const gaugeMinutes = positiveNumber(options, 'gaugeMinutes')
-  const rateRefreshHours = positiveNumber(options, 'rateRefreshHours')
-  const currency = options.currency
-  const rateUrl = options.rateUrl
 
   if (warnMinutes >= staleMinutes) {
     throw new Error(
@@ -35,14 +37,8 @@ export function readSettings(options: PluginOptions): Settings {
       `session-meter: staleMinutes (${staleMinutes}) must be below gaugeMinutes (${gaugeMinutes})`,
     )
   }
-  if (currency !== 'EUR' && currency !== 'USD') {
-    throw new Error(`session-meter: currency must be EUR or USD, got ${String(currency)}`)
-  }
-  if (typeof rateUrl !== 'string' || !/^https:\/\//.test(rateUrl)) {
-    throw new Error(`session-meter: rateUrl must be an https URL, got ${String(rateUrl)}`)
-  }
 
-  return { warnMinutes, staleMinutes, gaugeMinutes, currency, rateUrl, rateRefreshHours }
+  return { warnMinutes, staleMinutes, gaugeMinutes }
 }
 
 function positiveNumber(options: PluginOptions, name: string): number {
@@ -67,6 +63,51 @@ export function cacheLevel(minutes: number, settings: Settings): CacheLevel {
   return 'stale'
 }
 
+const LEVEL_NAME: Record<CacheLevel, string> = { fresh: 'Fresh', warn: 'Cooling', stale: 'Stale' }
+
+export function levelName(level: CacheLevel): string {
+  return LEVEL_NAME[level]
+}
+
+/** A span of time: "0:45 h", "4:21 h", "3 days". */
+export function formatSpan(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / MINUTE_MS))
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')} h`
+  const days = Math.floor(minutes / (24 * 60))
+
+  return days === 1 ? '1 day' : `${days} days`
+}
+
+/** "18% used" and "821k free" for the context window; dashes before the first response. */
+export function contextDetails(context: Context | null): [string, string] {
+  const share = contextFraction(context)
+  if (context === null || context.tokens === undefined || share === null) return ['— used', '— free']
+
+  return [`${Math.round(share * 100)}% used`, `${compactTokens(Math.max(0, context.window - context.tokens))} free`]
+}
+
+/**
+ * Two short lines, so the band stays one row: within a day "Resets 22:40" and
+ * "in 4:21 h"; further out "Resets Tue" and "at 18:00". Empty without a reset time.
+ */
+export function resetDetails(limit: Limit, now: number): [string, string] {
+  if (limit.resetsAt === undefined) return ['', '']
+  const at = resetDate(limit)
+  const clock = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+  if (at.getTime() - now < DAY_MS) return [`Resets ${clock}`, `in ${formatSpan(at.getTime() - now)}`]
+
+  return [`Resets ${WEEKDAYS[at.getDay()] ?? ''}`, `at ${clock}`]
+}
+
+function resetDate(limit: Limit): Date {
+  const at = new Date(limit.resetsAt ?? '')
+  if (Number.isNaN(at.getTime())) {
+    throw new Error(`session-meter: resetsAt is no ISO time: ${String(limit.resetsAt)}`)
+  }
+
+  return at
+}
+
 /** The share of the cache gauge's full scale (gaugeMinutes) the age has reached, 0 to 1. */
 export function cacheFraction(minutes: number, settings: Settings): number {
   return Math.min(1, minutes / settings.gaugeMinutes)
@@ -89,29 +130,37 @@ export function compactTokens(count: number): string {
   return `${(count / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`
 }
 
-/** The cost cell: euro when a rate is at hand and EUR is chosen, else dollars. */
-export function formatCost(usd: number | null, rate: Rate | null, settings: Settings): string {
-  if (usd === null) return '—'
-  if (settings.currency === 'EUR' && rate !== null) {
-    return `${(usd / rate.usdPerEur).toFixed(2)} €`
+/** The session's cost as Claude Code's own ledger gives it, in dollars. */
+export function formatCost(usd: number | null): string {
+  return usd === null ? '—' : `$${usd.toFixed(2)}`
+}
+
+export function limitLabel(limit: Limit): string {
+  return LIMIT_LABEL[limit.kind] ?? limit.kind
+}
+
+/** The share of the window used, 0 to 1 (an exceeded spend limit draws full). */
+export function limitFraction(limit: Limit): number {
+  return Math.min(1, Math.max(0, limit.percentUsed / 100))
+}
+
+/** Percent used, whole: 99.4 → "99%". */
+export function limitPercent(limit: Limit): string {
+  return `${Math.round(limit.percentUsed)}%`
+}
+
+/**
+ * When the window resets, in local time: "17:40" within a day of now, else the
+ * weekday ("Tue"); empty without a reset time.
+ */
+export function formatReset(limit: Limit, now: number): string {
+  if (limit.resetsAt === undefined) return ''
+  const at = resetDate(limit)
+  if (at.getTime() - now < DAY_MS) {
+    return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
   }
 
-  return `$${usd.toFixed(2)}`
-}
-
-/** Reads the USD rate and its date from the ECB daily XML; null when either is missing. */
-export function parseEcbRate(xml: string, fetchedAt: number): Rate | null {
-  const usd = /currency=['"]USD['"]\s+rate=['"]([0-9.]+)['"]/.exec(xml)?.[1]
-  const date = /time=['"](\d{4}-\d{2}-\d{2})['"]/.exec(xml)?.[1]
-  const usdPerEur = usd === undefined ? NaN : Number(usd)
-
-  if (date === undefined || !Number.isFinite(usdPerEur) || usdPerEur <= 0) return null
-
-  return { usdPerEur, date, fetchedAt }
-}
-
-export function isRateDue(rate: Rate | null, now: number, settings: Settings): boolean {
-  return rate === null || now - rate.fetchedAt >= settings.rateRefreshHours * HOUR_MS
+  return WEEKDAYS[at.getDay()] ?? ''
 }
 
 export { MINUTE_MS }

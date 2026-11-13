@@ -1,45 +1,53 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Context, Rate } from '../types'
-import { GAUGE_PX, barCells, cacheGauge, contextGauge } from './gauges'
+import type { Context, Limit } from '../types'
+import { GAUGE_PX, barCells, cacheGauge, contextGauge, limitGauge } from './gauges'
 import {
   MINUTE_MS,
   cacheFraction,
+  contextDetails,
+  formatSpan,
+  levelName,
+  resetDetails,
   cacheLevel,
   cacheMinutes,
   compactTokens,
   contextFraction,
   formatCost,
-  isRateDue,
-  parseEcbRate,
+  formatReset,
+  limitFraction,
+  limitLabel,
+  limitPercent,
   readSettings,
 } from './meter'
-import type { CacheLevel, Settings } from './meter'
+import type { CacheLevel } from './meter'
 
-const RATE_KEY = 'rate'
-/** Cells of each terminal bar. */
-const BAR_CELLS = 12
+/** Longest and shortest terminal bar, in cells. */
+const BAR_MAX = 12
+const BAR_MIN = 3
+/** Cells between the terminal line's groups. */
+const GROUP_GAP = 3
 
 const lastResponseAt = atom(
   { plugin: 'session-meter', key: 'lastResponseAt' } as const,
   null as number | null,
 )
 const costUsd = atom({ plugin: 'session-meter', key: 'costUsd' } as const, null as number | null)
-const rate = atom({ plugin: 'session-meter', key: 'rate' } as const, null as Rate | null, {
-  shape: 'rate-1',
-})
 const tick = atom({ plugin: 'session-meter', key: 'tick' } as const, 0)
 const context = atom({ plugin: 'session-meter', key: 'context' } as const, null as Context | null, {
   shape: 'context-1',
 })
+const limits = atom({ plugin: 'session-meter', key: 'limits' } as const, [] as Limit[], {
+  shape: 'limits-1',
+})
+const startedAt = atom({ plugin: 'session-meter', key: 'startedAt' } as const, null as number | null)
 
-function toContext(usage: { tokens?: number; window: number; percent?: number }): Context {
-  return {
-    window: usage.window,
-    ...(usage.tokens === undefined ? {} : { tokens: usage.tokens }),
-    ...(usage.percent === undefined ? {} : { percent: usage.percent }),
-  }
+type Usage = {
+  startedAt?: number
+  context: { tokens?: number; window: number; percent?: number }
+  rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[]
+  cost?: { usd: number }
 }
 
 const LEVEL_COLOR: Record<CacheLevel, 'success' | 'warning' | 'error'> = {
@@ -48,34 +56,28 @@ const LEVEL_COLOR: Record<CacheLevel, 'success' | 'warning' | 'error'> = {
   stale: 'error',
 }
 
-/** Fetches the ECB rate when the one held is missing or older than rateRefreshHours. */
-async function refreshRate($: EngineInterface, settings: Settings): Promise<void> {
-  if (settings.currency !== 'EUR') return
-
-  const now = await $.clock.now()
-  if (!isRateDue(await read($, rate), now, settings)) return
-
-  const response = await $.http.fetch(settings.rateUrl)
-  const fresh = response.ok ? parseEcbRate(response.text, now) : null
-  if (fresh === null) {
-    $.ui.log(`session-meter: no USD rate from ${settings.rateUrl} (status ${response.status})`)
-    return
+/** Keeps the engine's own readings: context fill, plan usage windows, cost. */
+async function keep($: EngineInterface, usage: Usage): Promise<void> {
+  const fill: Context = {
+    window: usage.context.window,
+    ...(usage.context.tokens === undefined ? {} : { tokens: usage.context.tokens }),
+    ...(usage.context.percent === undefined ? {} : { percent: usage.context.percent }),
   }
-  await update($, rate, () => fresh)
-  await $.store.set(RATE_KEY, fresh)
-}
-
-async function storedRate($: EngineInterface): Promise<Rate | null> {
-  const value = (await $.store.get(RATE_KEY)) as Partial<Rate> | undefined
-  if (
-    typeof value?.usdPerEur !== 'number' ||
-    typeof value.date !== 'string' ||
-    typeof value.fetchedAt !== 'number'
-  ) {
-    return null
+  const windows: Limit[] = usage.rateLimits.map(l => ({
+    kind: l.kind,
+    percentUsed: l.percentUsed,
+    ...(l.resetsAt === undefined ? {} : { resetsAt: l.resetsAt }),
+  }))
+  await update($, context, () => fill)
+  await update($, limits, () => windows)
+  if (usage.startedAt !== undefined) {
+    const began = usage.startedAt
+    await update($, startedAt, () => began)
   }
-
-  return { usdPerEur: value.usdPerEur, date: value.date, fetchedAt: value.fetchedAt }
+  if (usage.cost !== undefined) {
+    const usd = usage.cost.usd
+    await update($, costUsd, () => usd)
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -83,48 +85,25 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    const usage = await $.session.usage()
-    const fill = toContext(usage.context)
-    await update($, context, () => fill)
-    if (usage.cost !== undefined) {
-      const usd = usage.cost.usd
-      await update($, costUsd, () => usd)
-    }
-    if ((await read($, rate)) === null) {
-      const stored = await storedRate($)
-      if (stored !== null) await update($, rate, () => stored)
-    }
-    const refresh = () => {
-      refreshRate($, settings).catch((err: unknown) => {
-        $.ui.log(`session-meter: rate fetch failed: ${String(err)}`)
-      })
-    }
+    await keep($, await $.session.usage())
     $.clock.every(MINUTE_MS, () => {
       void update($, tick, n => n + 1)
-      refresh()
     })
-    $.clock.after(0, refresh)
 
     return result
   })
 
-  on('turn.step', async function* ($, e, next) {
-    const result = yield* next(e)
-    if (result.usage !== null && e.agentId === undefined) {
+  // The cache age counts from the last main-conversation response. The mod learns of one
+  // from the engine's figures alone: the main context's fill moves only when a response
+  // of the main conversation arrives (subagents keep their own context). It hooks no
+  // turn event, so it never sees the conversation's text.
+  on('session.measure', async ($, e, next) => {
+    const before = await read($, context)
+    if (e.context.tokens !== undefined && e.context.tokens !== before?.tokens) {
       const now = await $.clock.now()
       await update($, lastResponseAt, () => now)
     }
-
-    return result
-  })
-
-  on('session.measure', async ($, e, next) => {
-    const fill = toContext(e.context)
-    await update($, context, () => fill)
-    if (e.cost !== undefined) {
-      const usd = e.cost.usd
-      await update($, costUsd, () => usd)
-    }
+    await keep($, e)
 
     return next(e)
   })
@@ -136,67 +115,121 @@ export const register: Register = (on, options) => {
     await read($, tick)
     const last = await read($, lastResponseAt)
     const usd = await read($, costUsd)
-    const usdPerEur = await read($, rate)
     const fill = await read($, context)
+    const windows = await read($, limits)
+    const began = await read($, startedAt)
     const now = await $.clock.now()
 
     const minutes = last === null ? null : cacheMinutes(last, now)
     const level = minutes === null ? null : cacheLevel(minutes, settings)
-    const cost = formatCost(usd, usdPerEur, settings)
+    const cost = formatCost(usd)
+    const columns = 3 + windows.length
 
     // The terminal has no Svg element: it draws block bars below instead.
     if (e.surface !== 'terminal') {
       const { Svg } = $.ui.resolve({ ...e, surface: e.surface })
-      const cache = cacheGauge(minutes, level, settings)
-      const ctx = contextGauge(fill)
+      const levelColor = level === null ? undefined : LEVEL_COLOR[level]
+      const [used, free] = contextDetails(fill)
+      type Line = { text: string; color?: 'success' | 'warning' | 'error' }
+      type Group = { key: string; source: string; alt: string; title: string; lines: Line[] }
+      const cells: Group[] = [
+        {
+          key: 'cache',
+          ...cacheGauge(minutes, level, settings),
+          title: 'Cache',
+          lines: [
+            { text: level === null ? 'No response yet' : levelName(level), color: levelColor },
+          ],
+        },
+        { key: 'context', ...contextGauge(fill), title: 'Context', lines: [{ text: used }, { text: free }] },
+        ...windows.map(l => {
+          const [resets, left] = resetDetails(l, now)
+          return { key: `limit-${l.kind}`, ...limitGauge(l, now), title: limitLabel(l), lines: [{ text: resets }, { text: left }] }
+        }),
+      ]
 
+      // One row: each group takes the width its words need, the rest of the band is shared
+      // between the groups, and a small fixed gap keeps neighbours apart.
       return (
-        <Box flexDirection="row" flexWrap="nowrap" width="100%" alignItems="center">
-          <Box key="cache" width="33%" alignItems="center">
-            <Svg source={cache.source} alt={cache.alt} width={GAUGE_PX} height={GAUGE_PX} />
-          </Box>
-          <Box key="context" width="34%" alignItems="center">
-            <Svg source={ctx.source} alt={ctx.alt} width={GAUGE_PX} height={GAUGE_PX} />
-          </Box>
-          <Box key="cost" width="33%" flexDirection="column" alignItems="center">
-            <Text bold tabular wrap="truncate">
+        <Box flexDirection="row" flexWrap="nowrap" width="100%" alignItems="center" justifyContent="space-between" paddingX="sm" columnGap="sm">
+          {cells.map(c => (
+            <Box key={c.key} flexDirection="row" alignItems="center" gap="sm" flexShrink={0}>
+              <Svg source={c.source} alt={c.alt} width={GAUGE_PX} height={GAUGE_PX} />
+              <Box flexDirection="column">
+                <Text bold>{c.title}</Text>
+                {c.lines.map((line, i) => (
+                  <Text key={`${c.key}-${i}`} dimColor={line.color === undefined} color={line.color}>
+                    {line.text}
+                  </Text>
+                ))}
+              </Box>
+            </Box>
+          ))}
+          <Box key="cost" flexDirection="column" flexShrink={0}>
+            <Text bold>Cost</Text>
+            <Text bold tabular>
               {cost}
             </Text>
-            <Text dimColor>cost</Text>
+            <Text dimColor>{began === null ? '' : `Session ${formatSpan(now - began)}`}</Text>
           </Box>
         </Box>
       )
     }
 
-    const [cacheOn, cacheOff] = barCells(minutes === null ? 0 : cacheFraction(minutes, settings), BAR_CELLS)
-    const share = contextFraction(fill)
-    const [ctxRed, ctxGreen] = barCells(share ?? 0, BAR_CELLS)
-    const levelColor = level === null ? undefined : LEVEL_COLOR[level]
     const ctxText =
       fill === null
         ? '—'
         : `${fill.tokens === undefined ? '—' : compactTokens(fill.tokens)} / ${compactTokens(fill.window)}`
+    const cacheText = minutes === null ? ' —' : ` ${minutes} min`
+    const limitTexts = windows.map(l => {
+      const reset = formatReset(l, now)
+      return { limit: l, name: `${limitLabel(l)} `, text: ` ${limitPercent(l)}${reset === '' ? '' : ` ${reset}`}` }
+    })
+
+    // The bars share what the band's width leaves after the words.
+    const words =
+      'Cache '.length + cacheText.length + 'Context '.length + ctxText.length + 1 + 'Cost '.length + cost.length +
+      limitTexts.reduce((n, t) => n + t.name.length + t.text.length, 0) + GROUP_GAP * (columns - 1)
+    const bars = 2 + windows.length
+    const cells = Math.max(BAR_MIN, Math.min(BAR_MAX, Math.floor((e.props.bodyColumns - words) / bars)))
+
+    const [cacheOn, cacheOff] = barCells(minutes === null ? 0 : cacheFraction(minutes, settings), cells)
+    const [ctxRed, ctxGreen] = barCells(contextFraction(fill) ?? 0, cells)
+    const levelColor = level === null ? undefined : LEVEL_COLOR[level]
 
     return (
-      <Box flexDirection="row" flexWrap="nowrap" width="100%" gap={3}>
+      <Box flexDirection="row" flexWrap="nowrap" width="100%" gap={GROUP_GAP}>
         <Box key="cache" flexDirection="row">
-          <Text dimColor>cache </Text>
+          <Text dimColor>Cache </Text>
           <Text color={levelColor}>{'█'.repeat(cacheOn)}</Text>
           <Text dimColor>{'░'.repeat(cacheOff)}</Text>
           <Text bold tabular color={levelColor}>
-            {minutes === null ? ' —' : ` ${minutes} min`}
+            {cacheText}
           </Text>
         </Box>
         <Box key="context" flexDirection="row">
-          <Text dimColor>context </Text>
+          <Text dimColor>Context </Text>
           <Text color="error">{'█'.repeat(ctxRed)}</Text>
           <Text color="success">{'█'.repeat(ctxGreen)}</Text>
           <Text bold tabular>
             {` ${ctxText}`}
           </Text>
         </Box>
+        {limitTexts.map(t => {
+          const [red, green] = barCells(limitFraction(t.limit), cells)
+          return (
+            <Box key={`limit-${t.limit.kind}`} flexDirection="row">
+              <Text dimColor>{t.name}</Text>
+              <Text color="error">{'█'.repeat(red)}</Text>
+              <Text color="success">{'█'.repeat(green)}</Text>
+              <Text bold tabular>
+                {t.text}
+              </Text>
+            </Box>
+          )
+        })}
         <Box key="cost" flexDirection="row">
-          <Text dimColor>cost </Text>
+          <Text dimColor>Cost </Text>
           <Text bold tabular>
             {cost}
           </Text>

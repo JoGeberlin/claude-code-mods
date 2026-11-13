@@ -1,12 +1,3 @@
-export type Rate = {
-  /** US dollars per euro, as the ECB publishes it. */
-  usdPerEur: number
-  /** The ECB's reference date of the rate (YYYY-MM-DD). */
-  date: string
-  /** When the rate was fetched, in `$.clock.now()` milliseconds. */
-  fetchedAt: number
-}
-
 export type Context = {
   /** Input tokens the last response was answered over; absent before the first. */
   tokens?: number
@@ -16,14 +7,25 @@ export type Context = {
   percent?: number
 }
 
+/** One plan usage window as the engine reports it (`five_hour`, `seven_day`, `spend_limit`). */
+export type Limit = {
+  kind: string
+  /** 0 to 100; past 100 on an exceeded spend limit. */
+  percentUsed: number
+  /** ISO 8601 time the window resets. */
+  resetsAt?: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'session-meter': {
       lastResponseAt: number | null
       costUsd: number | null
-      rate: Shaped<Rate | null>
       tick: number
       context: Shaped<Context | null>
+      limits: Shaped<Limit[]>
+      /** When the session began, in `$.clock.now()` milliseconds. */
+      startedAt: number | null
     }
   }
 }

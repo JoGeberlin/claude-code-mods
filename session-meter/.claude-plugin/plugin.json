@@ -1,8 +1,8 @@
 {
   "name": "session-meter",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "displayName": "Session Meter",
-  "description": "Gauges above the prompt: prompt-cache age on a green-to-red dial with a needle, context window fill as a ring with the tokens inside, and the session's cost in euro or dollars.",
+  "description": "Gauges above the prompt: prompt-cache age on a green-to-red dial with a needle, context window fill, the plan's session and weekly usage, and the session's cost. Sends nothing anywhere.",
   "author": {
     "name": "JoGeberlin",
     "url": "https://github.com/JoGeberlin"
@@ -10,7 +10,7 @@
   "homepage": "https://github.com/JoGeberlin/claude-code-mods/tree/main/session-meter",
   "repository": "https://github.com/JoGeberlin/claude-code-mods",
   "license": "MIT",
-  "keywords": ["tokens", "cost", "prompt-cache", "context", "status"],
+  "keywords": ["tokens", "cost", "prompt-cache", "context", "usage", "rate-limits"],
   "types": "./types/index.d.ts",
   "userConfig": {
     "warnMinutes": {
@@ -30,25 +30,6 @@
       "title": "Cache gauge full scale (minutes)",
       "description": "The cache age at the dial's right end; the needle stops there.",
       "default": 60
-    },
-    "currency": {
-      "type": "string",
-      "title": "Cost currency",
-      "description": "EUR converts the session cost at the ECB daily reference rate; USD shows the engine's figure as is.",
-      "options": ["EUR", "USD"],
-      "default": "EUR"
-    },
-    "rateUrl": {
-      "type": "string",
-      "title": "Exchange-rate feed",
-      "description": "ECB daily reference rates (XML), read for the USD rate per euro.",
-      "default": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
-    },
-    "rateRefreshHours": {
-      "type": "number",
-      "title": "Exchange-rate refresh (hours)",
-      "description": "A stored rate older than this is fetched again.",
-      "default": 24
     }
   }
 }
